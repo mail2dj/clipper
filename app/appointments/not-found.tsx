@@ -11,7 +11,7 @@ export default function AppointmentNotFound() {
         <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-[#b94f3e]">That link wandered off</p>
         <h1 className="mt-3 font-serif text-4xl tracking-[-0.05em]">We can&apos;t find that visit.</h1>
         <p className="mt-4 text-sm leading-6 text-[#766b61]">Check the booking reference and try again, or start a fresh Clipper booking.</p>
-        <Link href="/#book" className="mt-7 inline-flex items-center gap-2 rounded-full bg-[#202321] px-5 py-3 text-sm font-bold text-[#fffaf3] transition-transform hover:-translate-y-0.5">
+        <Link href="/#book-prism" className="mt-7 inline-flex items-center gap-2 rounded-full bg-[#202321] px-5 py-3 text-sm font-bold text-[#fffaf3] transition-transform hover:-translate-y-0.5">
           <ArrowLeft aria-hidden="true" className="size-4" /> Back to booking
         </Link>
       </section>
