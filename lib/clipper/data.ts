@@ -106,6 +106,7 @@ export async function findAvailableGroomer(
   neighborhood: string,
   startsAt: Date,
   endsAt: Date,
+  excludeAppointmentId?: string,
 ): Promise<string | null> {
   const db = getDatabase();
   const weekday = startsAt.getUTCDay();
@@ -145,17 +146,19 @@ export async function findAvailableGroomer(
   if (candidates.length === 0) return null;
 
   const candidateIds = candidates.map((groomer) => groomer.groomerId);
+  const conflictConditions = [
+    inArray(appointments.groomerId, candidateIds),
+    lt(appointments.startsAt, endsAt),
+    gt(appointments.endsAt, startsAt),
+    ne(appointments.status, "cancelled"),
+  ];
+  if (excludeAppointmentId) {
+    conflictConditions.push(ne(appointments.id, excludeAppointmentId));
+  }
   const conflictingAppointments = await db
     .select({ groomerId: appointments.groomerId })
     .from(appointments)
-    .where(
-      and(
-        inArray(appointments.groomerId, candidateIds),
-        lt(appointments.startsAt, endsAt),
-        gt(appointments.endsAt, startsAt),
-        ne(appointments.status, "cancelled"),
-      ),
-    );
+    .where(and(...conflictConditions));
 
   const busyGroomerIds = new Set(
     conflictingAppointments
@@ -173,4 +176,184 @@ function timeOfDay(date: Date): string {
   return `${String(date.getUTCHours()).padStart(2, "0")}:${String(
     date.getUTCMinutes(),
   ).padStart(2, "0")}`;
+}
+
+const UNCANCELABLE_STATUSES = new Set(["cancelled", "completed"]);
+const RESCHEDULE_WINDOW_DAYS = 7;
+const SLOT_STEP_MS = 60 * 60 * 1000;
+
+type ActionError = { ok: false; error: "not_found" | "not_cancelable" | "no_groomer" };
+type ActionResult<T extends object = object> =
+  | ({ ok: true } & T)
+  | ActionError;
+
+export async function cancelAppointmentByReference(
+  reference: string,
+): Promise<ActionResult> {
+  const db = getDatabase();
+  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.bookingReference, reference))
+    .limit(1);
+
+  if (!appointment) return { ok: false, error: "not_found" };
+  if (UNCANCELABLE_STATUSES.has(appointment.status)) {
+    return { ok: false, error: "not_cancelable" };
+  }
+
+  await db
+    .update(appointments)
+    .set({ status: "cancelled", updatedAt: new Date() })
+    .where(eq(appointments.id, appointment.id));
+
+  return { ok: true };
+}
+
+export async function getRescheduleSlots(
+  reference: string,
+): Promise<ActionResult<{ slots: { startsAt: string; endsAt: string }[] }>> {
+  const db = getDatabase();
+  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.bookingReference, reference))
+    .limit(1);
+
+  if (!appointment) return { ok: false, error: "not_found" };
+  if (UNCANCELABLE_STATUSES.has(appointment.status)) {
+    return { ok: false, error: "not_cancelable" };
+  }
+
+  const [groomingPackage] = await db
+    .select()
+    .from(groomingPackages)
+    .where(eq(groomingPackages.id, appointment.packageId))
+    .limit(1);
+  if (!groomingPackage) return { ok: false, error: "not_found" };
+
+  const durationMs = groomingPackage.durationMinutes * 60 * 1000;
+  const now = new Date();
+  const slots: { startsAt: string; endsAt: string }[] = [];
+
+  for (let dayOffset = 0; dayOffset < RESCHEDULE_WINDOW_DAYS; dayOffset++) {
+    const day = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + dayOffset,
+      ),
+    );
+    const weekday = day.getUTCDay();
+
+    const window = await db
+      .select({
+        startTime: groomerSchedules.startTime,
+        endTime: groomerSchedules.endTime,
+      })
+      .from(groomers)
+      .innerJoin(
+        groomerServiceAreas,
+        eq(groomerServiceAreas.groomerId, groomers.id),
+      )
+      .innerJoin(
+        groomerSchedules,
+        and(
+          eq(groomerSchedules.groomerId, groomers.id),
+          eq(groomerSchedules.weekday, weekday),
+        ),
+      )
+      .where(
+        and(
+          eq(groomers.active, true),
+          eq(groomerServiceAreas.neighborhood, appointment.neighborhood),
+          eq(groomerSchedules.available, true),
+        ),
+      );
+
+    if (window.length === 0) continue;
+
+    const earliestStart = window.reduce(
+      (min, row) => (row.startTime < min ? row.startTime : min),
+      window[0].startTime,
+    );
+    const latestEnd = window.reduce(
+      (max, row) => (row.endTime > max ? row.endTime : max),
+      window[0].endTime,
+    );
+
+    const [startHour, startMinute] = earliestStart.split(":").map(Number);
+    const [endHour, endMinute] = latestEnd.split(":").map(Number);
+
+    let candidateStart = new Date(day);
+    candidateStart.setUTCHours(startHour, startMinute, 0, 0);
+    const dayEnd = new Date(day);
+    dayEnd.setUTCHours(endHour, endMinute, 0, 0);
+
+    while (candidateStart.getTime() + durationMs <= dayEnd.getTime()) {
+      const candidateEnd = new Date(candidateStart.getTime() + durationMs);
+
+      if (candidateStart.getTime() > now.getTime()) {
+        const groomerId = await findAvailableGroomer(
+          appointment.neighborhood,
+          candidateStart,
+          candidateEnd,
+          appointment.id,
+        );
+        if (groomerId) {
+          slots.push({
+            startsAt: candidateStart.toISOString(),
+            endsAt: candidateEnd.toISOString(),
+          });
+        }
+      }
+
+      candidateStart = new Date(candidateStart.getTime() + SLOT_STEP_MS);
+    }
+  }
+
+  return { ok: true, slots };
+}
+
+export async function rescheduleAppointmentByReference(
+  reference: string,
+  startsAt: Date,
+): Promise<ActionResult> {
+  const db = getDatabase();
+  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.bookingReference, reference))
+    .limit(1);
+
+  if (!appointment) return { ok: false, error: "not_found" };
+  if (UNCANCELABLE_STATUSES.has(appointment.status)) {
+    return { ok: false, error: "not_cancelable" };
+  }
+
+  const [groomingPackage] = await db
+    .select()
+    .from(groomingPackages)
+    .where(eq(groomingPackages.id, appointment.packageId))
+    .limit(1);
+  if (!groomingPackage) return { ok: false, error: "not_found" };
+
+  const endsAt = new Date(
+    startsAt.getTime() + groomingPackage.durationMinutes * 60 * 1000,
+  );
+
+  const groomerId = await findAvailableGroomer(
+    appointment.neighborhood,
+    startsAt,
+    endsAt,
+    appointment.id,
+  );
+  if (!groomerId) return { ok: false, error: "no_groomer" };
+
+  await db
+    .update(appointments)
+    .set({ groomerId, startsAt, endsAt, updatedAt: new Date() })
+    .where(eq(appointments.id, appointment.id));
+
+  return { ok: true };
 }
