@@ -11,6 +11,7 @@ import {
   UserRound,
 } from "lucide-react";
 
+import { formatBookingReference, formatDateLabel, formatTimeLabel, toSafeDate } from "@/lib/clipper/format";
 import type { AppointmentDetails } from "@/lib/clipper/types";
 
 type AppointmentCardProps = {
@@ -21,6 +22,7 @@ type DetailsForDisplay = {
   reference?: string | null;
   bookingReference?: string;
   address?: string | null;
+  addressDetail?: string | null;
   neighborhood?: string | null;
   startsAt?: Date | number | string | null;
   endsAt?: Date | number | string | null;
@@ -63,41 +65,16 @@ const statusLabels: Record<string, { label: string; className: string }> = {
   },
 };
 
-const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const months = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-function asDate(value: Date | number | string | null | undefined) {
-  if (!value) return null;
-  return value instanceof Date ? value : new Date(value);
-}
-
 function formatDate(value: Date | number | string | null | undefined) {
-  const date = asDate(value);
-  if (!date || Number.isNaN(date.getTime())) return "Date to be confirmed";
-  return `${weekdays[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+  const date = toSafeDate(value);
+  if (!date) return "Date to be confirmed";
+  return formatDateLabel(date, "long");
 }
 
 function formatTime(value: Date | number | string | null | undefined) {
-  const date = asDate(value);
-  if (!date || Number.isNaN(date.getTime())) return "Time to be confirmed";
-  const hour = date.getHours();
-  const minute = date.getMinutes().toString().padStart(2, "0");
-  const meridiem = hour >= 12 ? "PM" : "AM";
-  const twelveHour = hour % 12 || 12;
-  return `${twelveHour}:${minute} ${meridiem}`;
+  const date = toSafeDate(value);
+  if (!date) return "Time to be confirmed";
+  return formatTimeLabel(date);
 }
 
 function formatPrice(priceCents: number | null | undefined) {
@@ -118,6 +95,7 @@ export function AppointmentCard({ appointment }: AppointmentCardProps) {
   const address = details.address ?? "Address to be confirmed";
   const neighborhood = details.neighborhood ? `, ${details.neighborhood}` : "";
   const petName = details.pet?.name ?? "Your pet";
+  const reference = formatBookingReference(details.reference ?? details.bookingReference);
 
   return (
     <section aria-labelledby="appointment-details-heading" className="overflow-hidden rounded-2xl border border-[#dbe3ef] bg-white shadow-[0_20px_60px_rgba(38,46,77,0.08)]">
@@ -145,6 +123,7 @@ export function AppointmentCard({ appointment }: AppointmentCardProps) {
           <DetailRow icon={<MapPin aria-hidden="true" />} label="Where">
             <strong className="block font-semibold text-[#0a2540]">At your home</strong>
             <span>{address}{neighborhood}</span>
+            {details.addressDetail && <span className="block text-[#8898aa]">{details.addressDetail}</span>}
           </DetailRow>
           <DetailRow icon={<Clock3 aria-hidden="true" />} label="Visit length">
             <strong className="block font-semibold text-[#0a2540]">{service?.durationMinutes ?? "—"} minutes</strong>
@@ -184,7 +163,7 @@ export function AppointmentCard({ appointment }: AppointmentCardProps) {
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#e6ebf1] px-5 py-4 text-xs text-[#8898aa] sm:px-8">
         <span>Booked with Clipper</span>
-        <span className="font-mono tracking-[0.12em] text-[#53627a]">{details.reference ?? details.bookingReference ?? "CLP—"}</span>
+        <span className={reference.isPending ? "italic text-[#8898aa]" : "font-mono tracking-[0.12em] text-[#53627a]"}>{reference.label}</span>
       </div>
     </section>
   );

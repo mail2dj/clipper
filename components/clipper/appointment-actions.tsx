@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CalendarClock, X } from "lucide-react";
 
 import { Alert, AlertDescription, Button } from "@/components/ui";
+import { dateKeyInTimeZone, formatDateLabel, formatTimeLabel } from "@/lib/clipper/format";
 
 type AppointmentActionsProps = {
   reference: string;
@@ -12,27 +13,6 @@ type AppointmentActionsProps = {
 };
 
 type Slot = { startsAt: string; endsAt: string };
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function formatDateLabel(date: Date) {
-  return `${DAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}`;
-}
-
-function formatTimeLabel(date: Date) {
-  const hours = date.getHours();
-  const suffix = hours >= 12 ? "PM" : "AM";
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${hour12}:${String(date.getMinutes()).padStart(2, "0")} ${suffix}`;
-}
 
 export function AppointmentActions({ reference, status }: AppointmentActionsProps) {
   const router = useRouter();
@@ -43,6 +23,42 @@ export function AppointmentActions({ reference, status }: AppointmentActionsProp
   const [submittingSlot, setSubmittingSlot] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
+  const cancelDialogRef = useRef<HTMLDivElement>(null);
+  const keepAppointmentRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!showCancelConfirm) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    keepAppointmentRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowCancelConfirm(false);
+        return;
+      }
+      if (event.key !== "Tab" || !cancelDialogRef.current) return;
+      const focusable = cancelDialogRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [showCancelConfirm]);
 
   if (status === "cancelled" || status === "completed") {
     return (
@@ -103,7 +119,7 @@ export function AppointmentActions({ reference, status }: AppointmentActionsProp
   }
 
   const groupedSlots = slots.reduce<Record<string, Slot[]>>((groups, slot) => {
-    const key = dateKey(new Date(slot.startsAt));
+    const key = dateKeyInTimeZone(new Date(slot.startsAt));
     groups[key] = [...(groups[key] ?? []), slot];
     return groups;
   }, {});
@@ -183,11 +199,19 @@ export function AppointmentActions({ reference, status }: AppointmentActionsProp
 
       {showCancelConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a2540]/40 px-5">
-          <div className="w-full max-w-sm rounded-2xl border border-[#dbe3ef] bg-white p-6 shadow-[0_28px_80px_rgba(10,37,64,0.24)]">
-            <p className="text-lg font-bold text-[#0a2540]">Cancel this appointment?</p>
-            <p className="mt-2 text-sm text-[#53627a]">This can&apos;t be undone. You&apos;ll need to book a new visit if you change your mind.</p>
+          <div
+            ref={cancelDialogRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="cancel-appointment-heading"
+            aria-describedby="cancel-appointment-description"
+            className="w-full max-w-sm rounded-2xl border border-[#dbe3ef] bg-white p-6 shadow-[0_28px_80px_rgba(10,37,64,0.24)]"
+          >
+            <p id="cancel-appointment-heading" className="text-lg font-bold text-[#0a2540]">Cancel this appointment?</p>
+            <p id="cancel-appointment-description" className="mt-2 text-sm text-[#53627a]">This can&apos;t be undone. You&apos;ll need to book a new visit if you change your mind.</p>
             <div className="mt-6 flex justify-end gap-3">
               <Button
+                ref={keepAppointmentRef}
                 type="button"
                 variant="outline"
                 onClick={() => setShowCancelConfirm(false)}

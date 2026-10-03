@@ -1,6 +1,6 @@
 import { Check, Heart, Sparkles } from "lucide-react";
-import Link from "next/link";
 
+import { formatBookingReference, formatDateLabel, toSafeDate } from "@/lib/clipper/format";
 import type { AppointmentDetails } from "@/lib/clipper/types";
 
 type BookingConfirmationProps = {
@@ -22,32 +22,17 @@ const statusLabels: Record<string, string> = {
   pending: "Pending",
 };
 
-const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const months = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
 function formatDate(value: Date | number | string | null | undefined) {
-  const date = value instanceof Date ? value : value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return "your chosen day";
-  return `${weekdays[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
+  const date = toSafeDate(value);
+  if (!date) return "your chosen day";
+  return formatDateLabel(date, "long");
 }
 
 export function BookingConfirmation({ appointment }: BookingConfirmationProps) {
   const details = appointment as unknown as ConfirmationDetails;
   const petName = details.pet?.name ?? "your pet";
   const status = statusLabels[details.status ?? ""] ?? "Booked";
+  const reference = formatBookingReference(details.reference ?? details.bookingReference);
 
   return (
     <section className="relative overflow-hidden rounded-2xl bg-[#0a2540] px-5 py-8 text-white shadow-[0_28px_80px_rgba(10,37,64,0.24)] sm:px-8 sm:py-10">
@@ -66,7 +51,7 @@ export function BookingConfirmation({ appointment }: BookingConfirmationProps) {
         </p>
         <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3 text-sm text-[#d6e2ec]">
           <span className="inline-flex items-center gap-2"><Heart aria-hidden="true" className="size-4 fill-current" /> Made for good pets</span>
-          <span className="font-mono text-xs tracking-[0.14em] text-[#80e9ff]">{details.reference ?? details.bookingReference ?? "CLP—"}</span>
+          <span className={reference.isPending ? "text-xs italic text-[#adbdcc]" : "font-mono text-xs tracking-[0.14em] text-[#80e9ff]"}>{reference.label}</span>
         </div>
       </div>
     </section>

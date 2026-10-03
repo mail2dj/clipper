@@ -54,6 +54,7 @@ export const appointments = sqliteTable("appointments", {
     .notNull()
     .references(() => groomingPackages.id),
   address: text("address").notNull(),
+  addressDetail: text("address_detail"),
   neighborhood: text("neighborhood").notNull(),
   startsAt: integer("starts_at", { mode: "timestamp_ms" }).notNull(),
   endsAt: integer("ends_at", { mode: "timestamp_ms" }).notNull(),

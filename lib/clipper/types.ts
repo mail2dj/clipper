@@ -2,9 +2,16 @@ import type { appointments, groomers, groomingPackages } from "@/db/schema";
 
 export type GroomingPackage = typeof groomingPackages.$inferSelect;
 
+export type AvailableSlot = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+};
+
 export type BookingOption = {
   packages: GroomingPackage[];
   neighborhoods: string[];
+  availableSlots: AvailableSlot[];
 };
 
 export type AppointmentDetails = Omit<

@@ -1,18 +1,14 @@
 import Link from "next/link";
 
 import { getAppointments } from "@/lib/clipper/data";
+import { formatDateLabel, formatTimeLabel, toSafeDate } from "@/lib/clipper/format";
 
 export const dynamic = "force-dynamic";
 
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 function formatDate(value: string) {
-  const date = new Date(value);
-  const hours = date.getHours();
-  const suffix = hours >= 12 ? "PM" : "AM";
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  return `${DAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()} · ${hour12}:${String(date.getMinutes()).padStart(2, "0")} ${suffix}`;
+  const date = toSafeDate(value);
+  if (!date) return "Date to be confirmed";
+  return `${formatDateLabel(date, "short")} · ${formatTimeLabel(date)}`;
 }
 
 function formatMoney(cents: number) {

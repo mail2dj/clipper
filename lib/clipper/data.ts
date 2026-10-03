@@ -19,9 +19,25 @@ import {
 import { getDatabase } from "./db";
 import type {
   AppointmentDetails,
+  AvailableSlot,
   BookingOption,
   GroomingPackage,
 } from "./types";
+
+const DEFAULT_SLOT_DURATION_MS = 60 * 60 * 1000;
+
+// groomerSchedules.startTime/endTime and .weekday are wall-clock values in
+// Asia/Seoul (KST, fixed UTC+9, no DST). Shift into KST before reading
+// calendar fields so day boundaries and the "09:00" style strings line up.
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+function toKstShifted(date: Date): Date {
+  return new Date(date.getTime() + KST_OFFSET_MS);
+}
+
+function fromKstShifted(shifted: Date): Date {
+  return new Date(shifted.getTime() - KST_OFFSET_MS);
+}
 
 export async function getBookingOptions(): Promise<BookingOption> {
   const db = getDatabase();
@@ -35,10 +51,114 @@ export async function getBookingOptions(): Promise<BookingOption> {
     ...new Set(neighborhoodRows.map((row) => row.neighborhood)),
   ].sort();
 
+  const availableSlots = await getUpcomingAvailableSlots(neighborhoods);
+
   return {
     packages: packageRows,
     neighborhoods,
+    availableSlots,
   };
+}
+
+async function getUpcomingAvailableSlots(
+  neighborhoods: string[],
+): Promise<AvailableSlot[]> {
+  if (neighborhoods.length === 0) return [];
+
+  const db = getDatabase();
+  const now = new Date();
+  const kstNow = toKstShifted(now);
+  const slotsByStart = new Map<string, AvailableSlot>();
+
+  for (let dayOffset = 0; dayOffset < AVAILABILITY_WINDOW_DAYS; dayOffset++) {
+    const kstDay = new Date(
+      Date.UTC(
+        kstNow.getUTCFullYear(),
+        kstNow.getUTCMonth(),
+        kstNow.getUTCDate() + dayOffset,
+      ),
+    );
+    const weekday = kstDay.getUTCDay();
+
+    for (const neighborhood of neighborhoods) {
+      const windows = await db
+        .select({
+          startTime: groomerSchedules.startTime,
+          endTime: groomerSchedules.endTime,
+        })
+        .from(groomers)
+        .innerJoin(
+          groomerServiceAreas,
+          eq(groomerServiceAreas.groomerId, groomers.id),
+        )
+        .innerJoin(
+          groomerSchedules,
+          and(
+            eq(groomerSchedules.groomerId, groomers.id),
+            eq(groomerSchedules.weekday, weekday),
+          ),
+        )
+        .where(
+          and(
+            eq(groomers.active, true),
+            eq(groomerServiceAreas.neighborhood, neighborhood),
+            eq(groomerSchedules.available, true),
+          ),
+        );
+
+      if (windows.length === 0) continue;
+
+      const earliestStart = windows.reduce(
+        (min, row) => (row.startTime < min ? row.startTime : min),
+        windows[0].startTime,
+      );
+      const latestEnd = windows.reduce(
+        (max, row) => (row.endTime > max ? row.endTime : max),
+        windows[0].endTime,
+      );
+
+      const [startHour, startMinute] = earliestStart.split(":").map(Number);
+      const [endHour, endMinute] = latestEnd.split(":").map(Number);
+
+      let candidateKst = new Date(kstDay);
+      candidateKst.setUTCHours(startHour, startMinute, 0, 0);
+      const dayEndKst = new Date(kstDay);
+      dayEndKst.setUTCHours(endHour, endMinute, 0, 0);
+
+      while (
+        candidateKst.getTime() + DEFAULT_SLOT_DURATION_MS <=
+        dayEndKst.getTime()
+      ) {
+        const candidateStart = fromKstShifted(candidateKst);
+        const key = candidateStart.toISOString();
+        if (
+          candidateStart.getTime() > now.getTime() &&
+          !slotsByStart.has(key)
+        ) {
+          const candidateEnd = new Date(
+            candidateStart.getTime() + DEFAULT_SLOT_DURATION_MS,
+          );
+          const groomerId = await findAvailableGroomer(
+            neighborhood,
+            candidateStart,
+            candidateEnd,
+          );
+          if (groomerId) {
+            slotsByStart.set(key, {
+              id: `slot-${key}`,
+              startsAt: key,
+              endsAt: candidateEnd.toISOString(),
+            });
+          }
+        }
+        candidateKst = new Date(candidateKst.getTime() + SLOT_STEP_MS);
+      }
+    }
+  }
+
+  return [...slotsByStart.values()].sort((a, b) =>
+    a.startsAt.localeCompare(b.startsAt),
+  );
 }
 
 export async function getAppointmentByReference(
@@ -109,7 +229,7 @@ export async function findAvailableGroomer(
   excludeAppointmentId?: string,
 ): Promise<string | null> {
   const db = getDatabase();
-  const weekday = startsAt.getUTCDay();
+  const weekday = toKstShifted(startsAt).getUTCDay();
   const requestedStart = timeOfDay(startsAt);
   const requestedEnd = timeOfDay(endsAt);
 
@@ -173,13 +293,14 @@ export async function findAvailableGroomer(
 }
 
 function timeOfDay(date: Date): string {
-  return `${String(date.getUTCHours()).padStart(2, "0")}:${String(
-    date.getUTCMinutes(),
+  const kst = toKstShifted(date);
+  return `${String(kst.getUTCHours()).padStart(2, "0")}:${String(
+    kst.getUTCMinutes(),
   ).padStart(2, "0")}`;
 }
 
 const UNCANCELABLE_STATUSES = new Set(["cancelled", "completed"]);
-const RESCHEDULE_WINDOW_DAYS = 7;
+const AVAILABILITY_WINDOW_DAYS = 7;
 const SLOT_STEP_MS = 60 * 60 * 1000;
 
 type ActionError = { ok: false; error: "not_found" | "not_cancelable" | "no_groomer" };
@@ -234,17 +355,18 @@ export async function getRescheduleSlots(
 
   const durationMs = groomingPackage.durationMinutes * 60 * 1000;
   const now = new Date();
+  const kstNow = toKstShifted(now);
   const slots: { startsAt: string; endsAt: string }[] = [];
 
-  for (let dayOffset = 0; dayOffset < RESCHEDULE_WINDOW_DAYS; dayOffset++) {
-    const day = new Date(
+  for (let dayOffset = 0; dayOffset < AVAILABILITY_WINDOW_DAYS; dayOffset++) {
+    const kstDay = new Date(
       Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate() + dayOffset,
+        kstNow.getUTCFullYear(),
+        kstNow.getUTCMonth(),
+        kstNow.getUTCDate() + dayOffset,
       ),
     );
-    const weekday = day.getUTCDay();
+    const weekday = kstDay.getUTCDay();
 
     const window = await db
       .select({
@@ -285,12 +407,13 @@ export async function getRescheduleSlots(
     const [startHour, startMinute] = earliestStart.split(":").map(Number);
     const [endHour, endMinute] = latestEnd.split(":").map(Number);
 
-    let candidateStart = new Date(day);
-    candidateStart.setUTCHours(startHour, startMinute, 0, 0);
-    const dayEnd = new Date(day);
-    dayEnd.setUTCHours(endHour, endMinute, 0, 0);
+    let candidateKst = new Date(kstDay);
+    candidateKst.setUTCHours(startHour, startMinute, 0, 0);
+    const dayEndKst = new Date(kstDay);
+    dayEndKst.setUTCHours(endHour, endMinute, 0, 0);
 
-    while (candidateStart.getTime() + durationMs <= dayEnd.getTime()) {
+    while (candidateKst.getTime() + durationMs <= dayEndKst.getTime()) {
+      const candidateStart = fromKstShifted(candidateKst);
       const candidateEnd = new Date(candidateStart.getTime() + durationMs);
 
       if (candidateStart.getTime() > now.getTime()) {
@@ -308,7 +431,7 @@ export async function getRescheduleSlots(
         }
       }
 
-      candidateStart = new Date(candidateStart.getTime() + SLOT_STEP_MS);
+      candidateKst = new Date(candidateKst.getTime() + SLOT_STEP_MS);
     }
   }
 
