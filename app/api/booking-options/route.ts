@@ -1,25 +1,24 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
+import { getAvailableSlots, getBookingOptions } from "@/lib/clipper/data";
 
-import * as schema from "@/db/schema";
-import { groomerServiceAreas, groomingPackages } from "@/db/schema";
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const bindings = env as unknown as Record<string, D1Database>;
-    const db = drizzle(bindings.DB, { schema });
+    const options = await getBookingOptions();
 
-    const packages = await db.select().from(groomingPackages);
-    const areas = await db
-      .select({ neighborhood: groomerServiceAreas.neighborhood })
-      .from(groomerServiceAreas);
+    // Slots depend on where and how long the visit is, so they are only
+    // returned once the caller picks both a neighborhood and a package.
+    const params = new URL(request.url).searchParams;
+    const neighborhood = params.get("neighborhood")?.trim();
+    const groomingPackage = options.packages.find(
+      (pkg) => pkg.id === params.get("packageId"),
+    );
+    const slots =
+      neighborhood && groomingPackage
+        ? await getAvailableSlots(neighborhood, groomingPackage.durationMinutes)
+        : [];
 
-    return Response.json({
-      packages,
-      neighborhoods: [...new Set(areas.map((area) => area.neighborhood))].sort(),
-    });
+    return Response.json({ ...options, slots });
   } catch (error) {
-    console.error("error");
+    console.error("Failed to load booking options", error);
 
     return Response.json(
       { ok: false, error: "We could not load booking options." },

@@ -5,6 +5,8 @@ import {
   text,
 } from "drizzle-orm/sqlite-core";
 
+import type { AppointmentStatus } from "@/lib/clipper/status";
+
 export const groomers = sqliteTable("groomers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -57,7 +59,7 @@ export const appointments = sqliteTable("appointments", {
   neighborhood: text("neighborhood").notNull(),
   startsAt: integer("starts_at", { mode: "timestamp_ms" }).notNull(),
   endsAt: integer("ends_at", { mode: "timestamp_ms" }).notNull(),
-  status: text("status").notNull().default("confirmed"),
+  status: text("status").$type<AppointmentStatus>().notNull().default("confirmed"),
   priceCents: integer("price_cents").notNull(),
   notes: text("notes"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),

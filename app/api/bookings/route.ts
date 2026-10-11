@@ -65,6 +65,13 @@ export async function POST(request: Request) {
     );
   }
 
+  if (startsAt.getTime() <= Date.now()) {
+    return Response.json(
+      { ok: false, error: "startsAt must be in the future." },
+      { status: 400 },
+    );
+  }
+
   const db = getDatabase();
   const [groomingPackage] = await db
     .select()
@@ -83,7 +90,7 @@ export async function POST(request: Request) {
     startsAt.getTime() + groomingPackage.durationMinutes * 60 * 1000,
   );
   const groomerId = await findAvailableGroomer(
-    neighborhood,
+    neighborhood.trim(),
     startsAt,
     endsAt,
   );
