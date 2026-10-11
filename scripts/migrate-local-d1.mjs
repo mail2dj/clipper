@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 
-const command = process.platform === "win32" ? "npx.cmd" : "npx";
+// shell: true lets plain "npx" resolve on Windows, macOS and Linux alike.
 const result = spawnSync(
-  command,
+  "npx",
   ["wrangler", "d1", "migrations", "apply", "DB", "--local", "--config", "wrangler.jsonc"],
-  { cwd: process.cwd(), stdio: "inherit" },
+  { cwd: process.cwd(), stdio: "inherit", shell: true },
 );
 
 if (result.error) throw result.error;
