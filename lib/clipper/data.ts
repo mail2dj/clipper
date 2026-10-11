@@ -103,6 +103,7 @@ export async function findAvailableGroomer(
   neighborhood: string,
   startsAt: Date,
   endsAt: Date,
+  excludeAppointmentId?: string,
 ): Promise<string | null> {
   const db = getDatabase();
   const start = kstParts(startsAt);
@@ -154,6 +155,9 @@ export async function findAvailableGroomer(
         lt(appointments.startsAt, endsAt),
         gt(appointments.endsAt, startsAt),
         ne(appointments.status, "cancelled"),
+        excludeAppointmentId
+          ? ne(appointments.id, excludeAppointmentId)
+          : undefined,
       ),
     );
 
@@ -174,7 +178,10 @@ export async function findAvailableGroomer(
 export async function getAvailableSlots(
   neighborhood: string,
   durationMinutes: number,
-  now: Date = new Date(),
+  { now = new Date(), excludeAppointmentId }: {
+    now?: Date;
+    excludeAppointmentId?: string;
+  } = {},
 ): Promise<string[]> {
   const db = getDatabase();
 
@@ -222,6 +229,9 @@ export async function getAvailableSlots(
         lt(appointments.startsAt, rangeEnd),
         gt(appointments.endsAt, rangeStart),
         ne(appointments.status, "cancelled"),
+        excludeAppointmentId
+          ? ne(appointments.id, excludeAppointmentId)
+          : undefined,
       ),
     );
 
@@ -261,4 +271,109 @@ export async function getAvailableSlots(
   }
 
   return slots;
+}
+
+type ActionError = {
+  ok: false;
+  error: "not_found" | "not_changeable" | "no_groomer";
+};
+type ActionResult<T extends object = object> =
+  | ({ ok: true } & T)
+  | ActionError;
+
+async function getChangeableAppointment(reference: string) {
+  const db = getDatabase();
+  const [appointment] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.bookingReference, reference))
+    .limit(1);
+
+  if (!appointment) return { ok: false, error: "not_found" } as const;
+  if (appointment.status === "cancelled" || appointment.status === "completed") {
+    return { ok: false, error: "not_changeable" } as const;
+  }
+  return { ok: true, appointment } as const;
+}
+
+async function getPackageDuration(packageId: string): Promise<number | null> {
+  const [groomingPackage] = await getDatabase()
+    .select({ durationMinutes: groomingPackages.durationMinutes })
+    .from(groomingPackages)
+    .where(eq(groomingPackages.id, packageId))
+    .limit(1);
+
+  return groomingPackage?.durationMinutes ?? null;
+}
+
+export async function cancelAppointmentByReference(
+  reference: string,
+): Promise<ActionResult> {
+  const found = await getChangeableAppointment(reference);
+  if (!found.ok) return found;
+
+  await getDatabase()
+    .update(appointments)
+    .set({ status: "cancelled", updatedAt: new Date() })
+    .where(eq(appointments.id, found.appointment.id));
+
+  return { ok: true };
+}
+
+export async function getRescheduleSlots(
+  reference: string,
+): Promise<ActionResult<{ slots: { startsAt: string; endsAt: string }[] }>> {
+  const found = await getChangeableAppointment(reference);
+  if (!found.ok) return found;
+
+  const { appointment } = found;
+  const durationMinutes = await getPackageDuration(appointment.packageId);
+  if (durationMinutes === null) return { ok: false, error: "not_found" };
+
+  const starts = await getAvailableSlots(
+    appointment.neighborhood,
+    durationMinutes,
+    { excludeAppointmentId: appointment.id },
+  );
+
+  return {
+    ok: true,
+    slots: starts.map((startsAt) => ({
+      startsAt,
+      endsAt: new Date(
+        new Date(startsAt).getTime() + durationMinutes * 60_000,
+      ).toISOString(),
+    })),
+  };
+}
+
+export async function rescheduleAppointmentByReference(
+  reference: string,
+  startsAt: Date,
+): Promise<ActionResult> {
+  const found = await getChangeableAppointment(reference);
+  if (!found.ok) return found;
+
+  const { appointment } = found;
+  const durationMinutes = await getPackageDuration(appointment.packageId);
+  if (durationMinutes === null) return { ok: false, error: "not_found" };
+
+  const endsAt = new Date(startsAt.getTime() + durationMinutes * 60_000);
+  const groomerId =
+    startsAt.getTime() > Date.now()
+      ? await findAvailableGroomer(
+          appointment.neighborhood,
+          startsAt,
+          endsAt,
+          appointment.id,
+        )
+      : null;
+  if (!groomerId) return { ok: false, error: "no_groomer" };
+
+  await getDatabase()
+    .update(appointments)
+    .set({ groomerId, startsAt, endsAt, updatedAt: new Date() })
+    .where(eq(appointments.id, appointment.id));
+
+  return { ok: true };
 }

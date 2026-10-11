@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, Button, Input } from "@/components/ui";
 import { formatKstDate, formatKstTime, formatMoney, kstDateKey } from "@/lib/clipper/format";
@@ -27,6 +27,8 @@ type SlotOption = {
   timeLabel: string;
 };
 
+type FieldName = "petName" | "petBreed" | "packageId" | "address" | "neighborhood" | "slot";
+
 function toSlotOption(startsAt: string): SlotOption {
   return {
     startsAt,
@@ -38,15 +40,24 @@ function toSlotOption(startsAt: string): SlotOption {
 
 export function BookingFlow({ sectionId = "book", variant = "prism", theme = { ink: "#0a2540", accent: "#635bff" } }: { sectionId?: string; variant?: "prism"; theme?: { ink: string; accent: string } }) {
   const [options, setOptions] = useState<BookingOptionsResponse>({ packages: [], neighborhoods: [], slots: [] });
-  const [petName, setPetName] = useState("Luna");
-  const [petBreed, setPetBreed] = useState("Miniature Poodle");
-  const [selectedPackageId, setSelectedPackageId] = useState("pkg_full_groom");
-  const [selectedNeighborhood, setSelectedNeighborhood] = useState("Itaewon");
-  const [address, setAddress] = useState("42 Itaewon-ro 27ga-gil");
+  const [petName, setPetName] = useState("");
+  const [petBreed, setPetBreed] = useState("");
+  const [selectedPackageId, setSelectedPackageId] = useState("");
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState("");
+  const [address, setAddress] = useState("");
+  const [addressDetail, setAddressDetail] = useState("");
   const [selectedSlot, setSelectedSlot] = useState("");
   const [loadingOptions, setLoadingOptions] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldName, string>>>({});
+
+  const petNameRef = useRef<HTMLInputElement>(null);
+  const breedRef = useRef<HTMLSelectElement>(null);
+  const packageGroupRef = useRef<HTMLDivElement>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
+  const neighborhoodRef = useRef<HTMLSelectElement>(null);
+  const slotGroupRef = useRef<HTMLDivElement>(null);
 
   const selectedPackage = options.packages.find((pkg) => pkg.id === selectedPackageId);
   const totalPrice = selectedPackage?.priceCents ?? 0;
@@ -62,7 +73,9 @@ export function BookingFlow({ sectionId = "book", variant = "prism", theme = { i
   useEffect(() => {
     let cancelled = false;
     setLoadingOptions(true);
-    const query = new URLSearchParams({ neighborhood: selectedNeighborhood, packageId: selectedPackageId });
+    const query = new URLSearchParams();
+    if (selectedNeighborhood) query.set("neighborhood", selectedNeighborhood);
+    if (selectedPackageId) query.set("packageId", selectedPackageId);
     fetch(`/api/booking-options?${query}`)
       .then((response) => {
         if (!response.ok) throw new Error("Could not load booking options");
@@ -71,7 +84,7 @@ export function BookingFlow({ sectionId = "book", variant = "prism", theme = { i
       .then((data) => {
         if (cancelled) return;
         setOptions(data);
-        setSelectedSlot((current) => (data.slots.includes(current) ? current : data.slots[0] ?? ""));
+        setSelectedSlot((current) => (data.slots.includes(current) ? current : ""));
       })
       .catch(() => {
         if (!cancelled) setFormError("We couldn’t load available times. Please refresh and try again.");
@@ -82,17 +95,51 @@ export function BookingFlow({ sectionId = "book", variant = "prism", theme = { i
     return () => { cancelled = true; };
   }, [selectedNeighborhood, selectedPackageId]);
 
+  function focusFirstInvalid(errors: Partial<Record<FieldName, string>>) {
+    const order: { name: FieldName; element: HTMLElement | null }[] = [
+      { name: "petName", element: petNameRef.current },
+      { name: "petBreed", element: breedRef.current as HTMLElement | null },
+      { name: "packageId", element: packageGroupRef.current },
+      { name: "address", element: addressRef.current },
+      { name: "neighborhood", element: neighborhoodRef.current as HTMLElement | null },
+      { name: "slot", element: slotGroupRef.current },
+    ];
+    const first = order.find((field) => errors[field.name]);
+    first?.element?.focus();
+    first?.element?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   function validateAndSubmit() {
-    if (!petName.trim() || !petBreed.trim() || !selectedPackageId || !selectedNeighborhood || !address.trim() || !chosenSlot) {
+    const errors: Partial<Record<FieldName, string>> = {};
+    if (!petName.trim()) errors.petName = "Enter your pet's name.";
+    if (!petBreed) errors.petBreed = "Choose a breed.";
+    if (!selectedPackageId) errors.packageId = "Choose a service.";
+    if (!address.trim()) errors.address = "Enter a street address.";
+    if (!selectedNeighborhood) errors.neighborhood = "Choose a neighborhood.";
+    if (!chosenSlot) errors.slot = "Pick an arrival time.";
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
       setFormError("Please complete each step before booking your Clipper visit.");
+      focusFirstInvalid(errors);
       return;
     }
+
+    setFieldErrors({});
     setSubmitting(true);
     setFormError("");
     fetch("/api/bookings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ petName: petName.trim(), petBreed, packageId: selectedPackageId, neighborhood: selectedNeighborhood, address: address.trim(), startsAt: chosenSlot.startsAt }),
+      body: JSON.stringify({
+        petName: petName.trim(),
+        petBreed,
+        packageId: selectedPackageId,
+        neighborhood: selectedNeighborhood,
+        address: address.trim(),
+        addressDetail: addressDetail.trim(),
+        startsAt: chosenSlot!.startsAt,
+      }),
     })
       .then(async (response) => {
         const data = (await response.json().catch(() => null)) as { reference?: string; error?: string } | null;
@@ -128,24 +175,105 @@ export function BookingFlow({ sectionId = "book", variant = "prism", theme = { i
 
                 <fieldset>
                   <legend className="mb-4 text-lg font-bold tracking-[-0.025em]" style={{ color: ink }}>1. Who are we grooming?</legend>
-                  <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold text-[#53627a]">Pet name<Input aria-label="Pet name" value={petName} onChange={(event) => setPetName(event.target.value)} placeholder="e.g. Luna" className="mt-2 h-12 rounded-md border-[#dbe3ef] bg-white px-4 text-base font-normal text-[#0a2540] focus-visible:ring-[#635bff]" /></label><label className="text-xs font-bold text-[#53627a]">Breed<select aria-label="Breed" value={petBreed} onChange={(event) => setPetBreed(event.target.value)} className="mt-2 h-12 w-full rounded-md border border-[#dbe3ef] bg-white px-4 text-base font-normal text-[#0a2540] outline-none focus:border-[#635bff]"><option value="">Choose a breed</option><option>Golden Retriever</option><option>Labrador Retriever</option><option>French Bulldog</option><option>German Shepherd</option><option>Poodle</option><option>Miniature Poodle</option><option>Pomeranian</option><option>Shiba Inu</option><option>Welsh Corgi</option><option>Yorkshire Terrier</option><option>Mixed Breed</option></select></label></div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-xs font-bold text-[#53627a]">
+                      Pet name
+                      <Input
+                        ref={petNameRef}
+                        value={petName}
+                        onChange={(event) => { setPetName(event.target.value); setFieldErrors((errors) => ({ ...errors, petName: undefined })); }}
+                        placeholder="e.g. Luna"
+                        autoComplete="off"
+                        aria-invalid={Boolean(fieldErrors.petName)}
+                        aria-describedby={fieldErrors.petName ? "pet-name-error" : undefined}
+                        className="mt-2 h-12 rounded-md border-[#dbe3ef] bg-white px-4 text-base font-normal text-[#0a2540] focus-visible:ring-[#635bff]"
+                      />
+                      {fieldErrors.petName && <span id="pet-name-error" className="mt-1 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.petName}</span>}
+                    </label>
+                    <label className="text-xs font-bold text-[#53627a]">
+                      Breed
+                      <select
+                        ref={breedRef}
+                        value={petBreed}
+                        onChange={(event) => { setPetBreed(event.target.value); setFieldErrors((errors) => ({ ...errors, petBreed: undefined })); }}
+                        aria-invalid={Boolean(fieldErrors.petBreed)}
+                        aria-describedby={fieldErrors.petBreed ? "pet-breed-error" : undefined}
+                        className="mt-2 h-12 w-full rounded-md border border-[#dbe3ef] bg-white px-4 text-base font-normal text-[#0a2540] outline-none focus:border-[#635bff]"
+                      >
+                        <option value="">Choose a breed</option>
+                        <option>Golden Retriever</option>
+                        <option>Labrador Retriever</option>
+                        <option>French Bulldog</option>
+                        <option>German Shepherd</option>
+                        <option>Poodle</option>
+                        <option>Miniature Poodle</option>
+                        <option>Pomeranian</option>
+                        <option>Shiba Inu</option>
+                        <option>Welsh Corgi</option>
+                        <option>Yorkshire Terrier</option>
+                        <option>Mixed Breed</option>
+                      </select>
+                      {fieldErrors.petBreed && <span id="pet-breed-error" className="mt-1 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.petBreed}</span>}
+                    </label>
+                  </div>
                 </fieldset>
 
                 <fieldset>
                   <legend className="mb-4 text-lg font-bold tracking-[-0.025em]" style={{ color: ink }}>2. Choose a service</legend>
-                  <div className="divide-y divide-[#e6ebf1] border-y border-[#e6ebf1]">{options.packages.map((pkg) => <button type="button" key={pkg.id} onClick={() => { setSelectedPackageId(pkg.id); setFormError(""); }} className={cn("grid w-full grid-cols-[1fr_auto] items-center gap-5 px-1 py-5 text-left", selectedPackageId === pkg.id ? "" : "opacity-70 hover:opacity-100")}><span><span className="flex items-center gap-2 font-bold" style={{ color: ink }}><span className="size-2 rounded-full" style={{ background: selectedPackageId === pkg.id ? accent : "#dbe3ef" }} />{pkg.name}</span><span className="mt-1 block pl-4 text-xs leading-5 text-[#8898aa]">{pkg.description}</span></span><span className="text-right"><span className="block font-bold" style={{ color: ink }}>{formatMoney(pkg.priceCents)}</span><span className="text-xs text-[#8898aa]">{pkg.durationMinutes} min</span></span></button>)}</div>
+                  <div ref={packageGroupRef} tabIndex={-1} role="group" aria-describedby={fieldErrors.packageId ? "package-error" : undefined} className="divide-y divide-[#e6ebf1] border-y border-[#e6ebf1]">{options.packages.map((pkg) => <button type="button" key={pkg.id} onClick={() => { setSelectedPackageId(pkg.id); setFormError(""); setFieldErrors((errors) => ({ ...errors, packageId: undefined })); }} className={cn("grid w-full grid-cols-[1fr_auto] items-center gap-5 px-1 py-5 text-left", selectedPackageId === pkg.id ? "" : "opacity-70 hover:opacity-100")}><span><span className="flex items-center gap-2 font-bold" style={{ color: ink }}><span className="size-2 rounded-full" style={{ background: selectedPackageId === pkg.id ? accent : "#dbe3ef" }} />{pkg.name}</span><span className="mt-1 block pl-4 text-xs leading-5 text-[#8898aa]">{pkg.description}</span></span><span className="text-right"><span className="block font-bold" style={{ color: ink }}>{formatMoney(pkg.priceCents)}</span><span className="text-xs text-[#8898aa]">{pkg.durationMinutes} min</span></span></button>)}</div>
+                  {fieldErrors.packageId && <span id="package-error" className="mt-2 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.packageId}</span>}
                 </fieldset>
 
                 <fieldset>
                   <legend className="mb-4 text-lg font-bold tracking-[-0.025em]" style={{ color: ink }}>3. Where should we arrive?</legend>
-                  <div className="grid gap-3 sm:grid-cols-[1.25fr_0.75fr]"><Input aria-label="Street address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Street address" className="h-12 rounded-md border-[#dbe3ef] bg-white px-4 focus-visible:ring-[#705cf6]" /><select aria-label="Neighborhood" value={selectedNeighborhood} onChange={(event) => setSelectedNeighborhood(event.target.value)} className="h-12 rounded-md border border-[#dbe3ef] bg-white px-4 text-sm outline-none"><option value="">Neighborhood</option>{options.neighborhoods.map((neighborhood) => <option key={neighborhood} value={neighborhood}>{neighborhood}</option>)}</select></div>
-                  <Input placeholder="Apartment, floor, or gate code (optional)" className="mt-3 h-11 rounded-md border-[#dbe3ef] bg-white px-4" />
+                  <div className="grid gap-3 sm:grid-cols-[1.25fr_0.75fr]">
+                    <label className="text-xs font-bold text-[#53627a]">
+                      Street address
+                      <Input
+                        ref={addressRef}
+                        value={address}
+                        onChange={(event) => { setAddress(event.target.value); setFieldErrors((errors) => ({ ...errors, address: undefined })); }}
+                        placeholder="Street address"
+                        autoComplete="street-address"
+                        aria-invalid={Boolean(fieldErrors.address)}
+                        aria-describedby={fieldErrors.address ? "address-error" : undefined}
+                        className="mt-2 h-12 rounded-md border-[#dbe3ef] bg-white px-4 focus-visible:ring-[#705cf6]"
+                      />
+                      {fieldErrors.address && <span id="address-error" className="mt-1 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.address}</span>}
+                    </label>
+                    <label className="text-xs font-bold text-[#53627a]">
+                      Neighborhood
+                      <select
+                        ref={neighborhoodRef}
+                        value={selectedNeighborhood}
+                        onChange={(event) => { setSelectedNeighborhood(event.target.value); setFieldErrors((errors) => ({ ...errors, neighborhood: undefined })); }}
+                        aria-invalid={Boolean(fieldErrors.neighborhood)}
+                        aria-describedby={fieldErrors.neighborhood ? "neighborhood-error" : undefined}
+                        className="mt-2 h-12 w-full rounded-md border border-[#dbe3ef] bg-white px-4 text-sm outline-none"
+                      >
+                        <option value="">Neighborhood</option>
+                        {options.neighborhoods.map((neighborhood) => <option key={neighborhood} value={neighborhood}>{neighborhood}</option>)}
+                      </select>
+                      {fieldErrors.neighborhood && <span id="neighborhood-error" className="mt-1 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.neighborhood}</span>}
+                    </label>
+                  </div>
+                  <label className="mt-3 block text-xs font-bold text-[#53627a]">
+                    Apartment, floor, or gate code (optional)
+                    <Input
+                      value={addressDetail}
+                      onChange={(event) => setAddressDetail(event.target.value)}
+                      placeholder="e.g. Unit 4B, gate code 1234"
+                      autoComplete="address-line2"
+                      className="mt-2 h-11 rounded-md border-[#dbe3ef] bg-white px-4 text-base font-normal text-[#0a2540]"
+                    />
+                  </label>
                 </fieldset>
 
                 <fieldset>
                   <legend className="mb-1 text-lg font-bold tracking-[-0.025em]" style={{ color: ink }}>4. Pick an arrival time</legend>
                   <p className="mb-4 text-xs text-[#8898aa]">All times KST · matched against live groomer routes</p>
-                  <div className="grid gap-5 sm:grid-cols-2">{Object.entries(groupedSlots).map(([dateKey, dateSlots]) => <div key={dateKey}><p className="mb-2 text-sm font-bold" style={{ color: ink }}>{dateSlots[0]?.dateLabel}</p><div className="grid grid-cols-2 gap-2">{dateSlots.map((slot) => <button type="button" key={slot.startsAt} onClick={() => { setSelectedSlot(slot.startsAt); setFormError(""); }} className={cn("rounded-md border px-3 py-3 text-sm font-bold", selectedSlot === slot.startsAt ? "text-white" : "border-[#dbe3ef] bg-white text-[#425466]")} style={selectedSlot === slot.startsAt ? { background: accent, borderColor: accent } : undefined}>{slot.timeLabel}</button>)}</div></div>)}{!slots.length && !loadingOptions && <p className="text-sm text-[#53627a]">No routes are open for this address yet.</p>}</div>
+                  <div ref={slotGroupRef} tabIndex={-1} role="group" aria-describedby={fieldErrors.slot ? "slot-error" : undefined} className="grid gap-5 sm:grid-cols-2">{Object.entries(groupedSlots).map(([dateKey, dateSlots]) => <div key={dateKey}><p className="mb-2 text-sm font-bold" style={{ color: ink }}>{dateSlots[0]?.dateLabel}</p><div className="grid grid-cols-2 gap-2">{dateSlots.map((slot) => <button type="button" key={slot.startsAt} onClick={() => { setSelectedSlot(slot.startsAt); setFormError(""); setFieldErrors((errors) => ({ ...errors, slot: undefined })); }} className={cn("rounded-md border px-3 py-3 text-sm font-bold", selectedSlot === slot.startsAt ? "text-white" : "border-[#dbe3ef] bg-white text-[#425466]")} style={selectedSlot === slot.startsAt ? { background: accent, borderColor: accent } : undefined}>{slot.timeLabel}</button>)}</div></div>)}{!slots.length && !loadingOptions && <p className="text-sm text-[#53627a]">{selectedNeighborhood && selectedPackageId ? "No routes are open for this address yet." : "Choose a service and neighborhood to see available times."}</p>}</div>
+                  {fieldErrors.slot && <span id="slot-error" className="mt-2 block text-xs font-semibold text-[#9f3f38]">{fieldErrors.slot}</span>}
                 </fieldset>
               </div>
 

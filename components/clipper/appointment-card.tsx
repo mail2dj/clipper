@@ -55,6 +55,7 @@ export function AppointmentCard({ appointment }: AppointmentCardProps) {
           <DetailRow icon={<MapPin aria-hidden="true" />} label="Where">
             <strong className="block font-semibold text-[#0a2540]">At your home</strong>
             <span>{address}{neighborhood}</span>
+            {appointment.addressDetail && <span className="block text-[#8898aa]">{appointment.addressDetail}</span>}
           </DetailRow>
           <DetailRow icon={<Clock3 aria-hidden="true" />} label="Visit length">
             <strong className="block font-semibold text-[#0a2540]">{service.durationMinutes} minutes</strong>

@@ -8,6 +8,13 @@
       "when": 1787050532100,
       "tag": "0000_initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791007857322,
+      "tag": "0001_strange_dazzler",
+      "breakpoints": true
     }
   ]
 }

@@ -20,13 +20,16 @@ There is no test runner or linter configured.
 
 - **Runtime/DB access**: `lib/clipper/db.ts` gets the D1 binding (`DB`, declared in `wrangler.jsonc`) via `import { env } from "cloudflare:workers"` and wraps it with Drizzle using `db/schema.ts`. There is no `process.env`-style connection; always go through `getDatabase()`, per request.
 - **Schema/migrations**: `db/schema.ts` defines tables (groomers, grooming_packages, groomer_service_areas, groomer_schedules, appointments). Migrations are SQL files in `drizzle/` (configured by `drizzle.config.ts`, also referenced as `migrations_dir` in `wrangler.jsonc`). Apply locally with `db:migrate:local`, which shells out to `wrangler d1 migrations apply DB --local`. Seed data is in `scripts/seed.sql`.
-- **Data layer**: `lib/clipper/data.ts` holds query functions (booking options, appointment lookup by booking reference, `findAvailableGroomer` matching service area + schedule + non-overlapping appointments). Shared view types are in `lib/clipper/types.ts`. Server pages and API routes both call into this layer.
-- **Routes** (`app/`): `/` home, `/appointments` list and `/appointments/[reference]` detail (looked up by booking reference), and API routes `api/booking-options` (GET options) and `api/bookings` (POST; validates JSON body, assigns an available groomer, inserts appointment).
+- **Data layer**: `lib/clipper/data.ts` holds query functions (booking options, appointment lookup by booking reference, `findAvailableGroomer` matching service area + schedule + non-overlapping appointments, `getAvailableSlots` for bookable start times, and cancel/reschedule by reference). Schedules and displayed times are KST; use the helpers in `lib/clipper/format.ts` rather than local `Date` getters, and `lib/clipper/status.ts` for appointment status display. Shared view types are in `lib/clipper/types.ts`. Server pages and API routes both call into this layer.
+- **Routes** (`app/`): `/` home, `/appointments` list and `/appointments/[reference]` detail (looked up by booking reference), and API routes `api/booking-options` (GET options; add `?neighborhood=&packageId=` to also get bookable `slots`), `api/bookings` (POST; validates JSON body, assigns an available groomer, inserts appointment) and `api/bookings/[reference]/{cancel,reschedule,slots}`.
 - **Components**: `components/clipper/*` are app-specific (booking flow, confirmation, cards, header); `components/ui/*` are generic primitives re-exported from `components/ui/index.ts`. Use the `@/` path alias for imports.
 - **Vite config** (`vite.config.ts`): `vinext` plugin plus `@cloudflare/vite-plugin` with the `rsc` environment (SSR as child), CDN cache adapter and image optimizer from `@vinext/cloudflare`.
 
 
 # Conventions
+
+- Prices are stored as `priceCents` and rendered as `₩{cents.toLocaleString("ko-KR")}` (`formatMoney`).
+- Always consider Cloudflare Workers / D1 runtime constraints; keep components modular and use TypeScript strictly.
 
 Migrations are generated, never hand-edited: change db/schema.ts, then `npx drizzle-kit generate`.
 No test runner exists. Don't invent one; use `npx tsc --noEmit`.
